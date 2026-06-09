@@ -182,7 +182,14 @@ async function handleChatCompletion(
   const targetSpec = tierConfig[tier];
   const LOCAL_CONTEXT_SOFT_LIMIT = 59000;
   const shouldSkipLocalForContext = estimatedRequestTokens >= LOCAL_CONTEXT_SOFT_LIMIT;
-  const attemptChain = shouldSkipLocalForContext
+  // Tool-use requests (body.tools is a non-empty array) skip local llamacpp
+  // tiers entirely. Small local models like Qwen3-30B accept tool definitions
+  // but in practice tend to ignore them and hallucinate file contents instead.
+  // Empirically a much bigger correctness win than the cost saving is worth.
+  const hasTools = Array.isArray(body.tools) && body.tools.length > 0;
+  const shouldSkipLocalForTools = hasTools;
+  const shouldSkipLocal = shouldSkipLocalForContext || shouldSkipLocalForTools;
+  const attemptChain = shouldSkipLocal
     ? chain.filter((attemptTier) => !isLocalLlamaCppProvider(tierConfig[attemptTier]))
     : chain;
   rlog.route({
@@ -196,6 +203,11 @@ async function handleChatCompletion(
   if (shouldSkipLocalForContext && attemptChain.length > 0) {
     log.warn(
       `[claw-llm-router] skipping local tiers for large request (~${estimatedRequestTokens} tokens > ${LOCAL_CONTEXT_SOFT_LIMIT})`,
+    );
+  }
+  if (shouldSkipLocalForTools && !shouldSkipLocalForContext && attemptChain.length > 0) {
+    log.warn(
+      `[claw-llm-router] skipping local tiers for tool-use request (${(body.tools as unknown[]).length} tools)`,
     );
   }
 
