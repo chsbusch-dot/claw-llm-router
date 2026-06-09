@@ -12,6 +12,7 @@
 import { readFileSync, renameSync, writeFileSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DatabaseSync } from "node:sqlite";
 import type { Tier } from "./classifier.js";
 
 const HOME = process.env.HOME;
@@ -20,6 +21,11 @@ if (!HOME) throw new Error("[claw-llm-router] HOME environment variable not set"
 const OPENCLAW_CONFIG_PATH = `${HOME}/.openclaw/openclaw.json`;
 const AUTH_PROFILES_PATH = `${HOME}/.openclaw/agents/main/agent/auth-profiles.json`;
 const AUTH_JSON_PATH = `${HOME}/.openclaw/agents/main/agent/auth.json`;
+// OpenClaw 2026.6.5+ migrated auth profiles from auth-profiles.json into a
+// sqlite store. The JSON file becomes a placeholder containing only
+// `claw-llm-router:default → proxy-handles-auth`. We read the sqlite store
+// directly when present, so credentials survive future migrations.
+const AUTH_SQLITE_PATH = `${HOME}/.openclaw/agents/main/agent/openclaw-agent.sqlite`;
 
 // Router config stored in plugin directory to avoid openclaw.json schema conflicts
 const PLUGIN_DIR = dirname(fileURLToPath(import.meta.url));
@@ -119,6 +125,58 @@ export type ApiKeyResult = { key: string; isOAuth: boolean };
 // Exported for testing — parses a single auth profile entry into key + OAuth flag.
 export type AuthProfile = { token?: string; key?: string; access?: string; type?: string };
 
+// ── Auth profile store reader ───────────────────────────────────────────────
+// OpenClaw 2026.6.5 migrated auth profiles from auth-profiles.json into a
+// sqlite store at openclaw-agent.sqlite (table `auth_profile_store`, row
+// `store_key='primary'`, value `store_json` blob). The JSON file becomes a
+// placeholder containing only `claw-llm-router:default → proxy-handles-auth`.
+//
+// We prefer the sqlite store when it exists and contains real profiles, then
+// fall back to the JSON file for older OpenClaw versions or scenarios where
+// the user manually restored the JSON. Uses Node's built-in node:sqlite (no
+// new npm dependency).
+//
+// `parseProfileCredential` already filters the `proxy-handles-auth` placeholder,
+// so a placeholder-only JSON store harmlessly returns no usable credential.
+
+type AuthProfileStore = { profiles?: Record<string, AuthProfile> };
+
+function readAuthProfileStoreFromSqlite(): AuthProfileStore | null {
+  if (!existsSync(AUTH_SQLITE_PATH)) return null;
+  let db: DatabaseSync | null = null;
+  try {
+    db = new DatabaseSync(AUTH_SQLITE_PATH, { readOnly: true });
+    const stmt = db.prepare(
+      "SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'",
+    );
+    const row = stmt.get() as { store_json?: string } | undefined;
+    if (!row?.store_json) return null;
+    const parsed = JSON.parse(row.store_json) as AuthProfileStore;
+    if (parsed.profiles && Object.keys(parsed.profiles).length > 0) return parsed;
+    return null;
+  } catch {
+    return null;
+  } finally {
+    db?.close();
+  }
+}
+
+function readAuthProfileStoreFromJson(): AuthProfileStore | null {
+  try {
+    const raw = readFileSync(AUTH_PROFILES_PATH, "utf8");
+    return JSON.parse(raw) as AuthProfileStore;
+  } catch {
+    return null;
+  }
+}
+
+// Read the auth profile store from whichever source has data. Returns an
+// empty object (not null) when neither source is available, so callers can
+// uniformly do `store.profiles?.[name]`.
+export function readAuthProfileStore(): AuthProfileStore {
+  return readAuthProfileStoreFromSqlite() ?? readAuthProfileStoreFromJson() ?? {};
+}
+
 export function parseProfileCredential(profile: AuthProfile): ApiKeyResult | null {
   const profileIsOAuth = profile.type === "oauth";
   // OAuth credentials (e.g., MiniMax) store the token in `access`.
@@ -145,39 +203,31 @@ export function loadApiKey(provider: string, log?: LogFn): ApiKeyResult {
     return { key, isOAuth };
   }
 
-  // 2. auth-profiles.json (canonical credential store)
+  // 2. Auth profile store (sqlite on OpenClaw 2026.6.5+, JSON on older)
   // Try both the provider name and any alias (e.g., minimax → minimax-portal)
   const alias = AUTH_PROFILE_ALIASES[provider];
   const profileNames = [`${provider}:default`];
   if (alias) profileNames.push(`${alias}:default`);
 
-  try {
-    const raw = readFileSync(AUTH_PROFILES_PATH, "utf8");
-    const store = JSON.parse(raw) as {
-      profiles?: Record<string, AuthProfile>;
-    };
+  const store = readAuthProfileStore();
+  for (const profileName of profileNames) {
+    const profile = store.profiles?.[profileName];
+    if (!profile) continue;
 
-    for (const profileName of profileNames) {
-      const profile = store.profiles?.[profileName];
-      if (!profile) continue;
-
-      const result = parseProfileCredential(profile);
-      if (result) {
-        log?.(
-          `[auth] ${provider}: using key from auth-profiles.json (${profileName}${result.isOAuth ? ", OAuth" : ""})`,
-        );
-        return result;
-      }
+    const result = parseProfileCredential(profile);
+    if (result) {
+      log?.(
+        `[auth] ${provider}: using key from auth profile store (${profileName}${result.isOAuth ? ", OAuth" : ""})`,
+      );
+      return result;
     }
-  } catch {
-    /* fall through */
   }
 
   // 3. auth.json (runtime cache)
   try {
     const raw = readFileSync(AUTH_JSON_PATH, "utf8");
-    const store = JSON.parse(raw) as Record<string, { key?: string; token?: string }>;
-    const entry = store[provider];
+    const cache = JSON.parse(raw) as Record<string, { key?: string; token?: string }>;
+    const entry = cache[provider];
     const key = entry?.key ?? entry?.token;
     if (key && key !== "proxy-handles-auth") {
       log?.(`[auth] ${provider}: using key from auth.json`);
