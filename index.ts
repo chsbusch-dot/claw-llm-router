@@ -461,7 +461,9 @@ function ensureProxyStarted(log: PluginLogger): Promise<void> {
     } catch (err: unknown) {
       const e = err as NodeJS.ErrnoException;
       if (e.code === "EADDRINUSE") {
-        log.warn(`${LOG_PREFIX} Port ${PROXY_PORT} already in use — another instance may be running`);
+        log.warn(
+          `${LOG_PREFIX} Port ${PROXY_PORT} already in use — another instance may be running`,
+        );
       } else {
         log.error(`${LOG_PREFIX} Failed to start proxy: ${err}`);
       }

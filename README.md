@@ -253,6 +253,26 @@ The router reads API keys from OpenClaw's existing auth stores (never stores its
 3. `~/.openclaw/agents/main/agent/auth.json`
 4. `~/.openclaw/openclaw.json` `env.vars` section
 
+### Profile Pinning
+
+When an auth profile is licensed or scoped to a specific model (e.g., a ChatGPT subscription-derived token that's only valid for one model family, or a separate account whose key must not be reused), declare a pin in `router-config.json`:
+
+```json
+{
+  "tiers": { ... },
+  "profilePins": {
+    "openai/gpt-5.3-codex": "openai:christian.busch@hotmail.com"
+  }
+}
+```
+
+Behavior:
+
+- **Pinned model** — only the named profile is tried. Env vars, `${provider}:default`, and other profiles are ignored. Fails closed if the pinned profile is missing or has no usable credential.
+- **Other models in the same provider** — the pinned profile is automatically excluded from their fallback list, so a profile reserved for one model cannot accidentally be picked up by another.
+
+Pins are filesystem-only (the file is in `.gitignore`) — they're per-deployment, not committed.
+
 ## Usage
 
 ### `/router` Command

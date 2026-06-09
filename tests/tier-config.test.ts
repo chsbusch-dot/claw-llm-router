@@ -1,6 +1,6 @@
 import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { loadApiKey, parseProfileCredential } from "../tier-config.js";
+import { loadApiKey, parseProfileCredential, filterRestrictedProfiles } from "../tier-config.js";
 
 describe("loadApiKey", () => {
   // These tests use env vars (priority 1) to avoid filesystem dependencies.
@@ -174,5 +174,55 @@ describe("parseProfileCredential", () => {
       access: undefined,
     });
     assert.equal(result, null);
+  });
+});
+
+// ── Profile pinning ─────────────────────────────────────────────────────────
+// filterRestrictedProfiles is the pure helper used to drop pinned profiles
+// from the generic-fallback list. The runtime path that consults
+// router-config.json is exercised via loadApiKey, but the filter logic
+// itself is filesystem-independent and tested directly here.
+
+describe("filterRestrictedProfiles", () => {
+  it("drops profiles present in the restricted set", () => {
+    const restricted = new Set(["openai:christian.busch@hotmail.com"]);
+    const result = filterRestrictedProfiles(
+      ["openai:default", "openai:christian.busch@hotmail.com"],
+      restricted,
+    );
+    assert.deepEqual(result, ["openai:default"]);
+  });
+
+  it("leaves profiles untouched when the restricted set is empty", () => {
+    const result = filterRestrictedProfiles(["openai:default", "openai:work"], new Set<string>());
+    assert.deepEqual(result, ["openai:default", "openai:work"]);
+  });
+
+  it("returns empty when every profile is restricted", () => {
+    const restricted = new Set(["openai:default", "openai:work"]);
+    const result = filterRestrictedProfiles(["openai:default", "openai:work"], restricted);
+    assert.deepEqual(result, []);
+  });
+});
+
+describe("loadApiKey env-var path with options arg", () => {
+  // The options-arg form must remain compatible with the original
+  // single-arg signature used by external callers and earlier tests.
+
+  const envKey = "TESTPROVIDER_API_KEY";
+  afterEach(() => {
+    delete process.env[envKey];
+  });
+
+  it("accepts no options arg (backward-compatible)", () => {
+    process.env[envKey] = "plain-key";
+    const result = loadApiKey("testprovider");
+    assert.equal(result.key, "plain-key");
+  });
+
+  it("accepts an options arg without modelId", () => {
+    process.env[envKey] = "plain-key";
+    const result = loadApiKey("testprovider", {});
+    assert.equal(result.key, "plain-key");
   });
 });

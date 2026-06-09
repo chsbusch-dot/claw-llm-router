@@ -40,6 +40,17 @@ export type TierConfig = Record<Tier, TierModelSpec>;
 
 type RouterConfig = {
   tiers: Record<Tier, string>;
+  // Pin a specific model to a specific auth profile. Key format: "provider/model".
+  // Value format: full profile name as it appears in auth-profiles.json
+  // (e.g. "openai:christian.busch@hotmail.com").
+  //
+  // When a model is pinned: only the named profile is tried — env vars,
+  // ${provider}:default, and any other profiles are ignored.
+  //
+  // The pinned profile is also REMOVED from the generic fallback list for
+  // unpinned models in the same provider — so a profile that's reserved for
+  // one model cannot accidentally be picked up by another.
+  profilePins?: Record<string, string>;
 };
 
 // ── Defaults ─────────────────────────────────────────────────────────────────
@@ -133,8 +144,69 @@ export function parseProfileCredential(profile: AuthProfile): ApiKeyResult | nul
   return { key, isOAuth };
 }
 
-export function loadApiKey(provider: string, log?: LogFn): ApiKeyResult {
+// Profile pinning helpers (read profilePins from router-config.json).
+
+// Resolve the profile pinned to a specific provider/model, if any.
+export function getPinnedProfile(
+  provider: string,
+  modelId: string | undefined,
+): string | undefined {
+  if (!modelId) return undefined;
+  const config = readRouterConfig();
+  return config?.profilePins?.[`${provider}/${modelId}`];
+}
+
+// All profiles that are pinned somewhere — these are skipped by the generic
+// fallback resolution so they cannot accidentally serve a different model.
+export function getRestrictedProfiles(): Set<string> {
+  const config = readRouterConfig();
+  return new Set(Object.values(config?.profilePins ?? {}));
+}
+
+// Pure helper exposed for tests: filter a candidate profile list to drop
+// restricted profiles (those pinned to other models).
+export function filterRestrictedProfiles(
+  profileNames: string[],
+  restricted: Set<string>,
+): string[] {
+  return profileNames.filter((name) => !restricted.has(name));
+}
+
+export function loadApiKey(
+  provider: string,
+  options?: { log?: LogFn; modelId?: string },
+): ApiKeyResult {
+  const log = options?.log;
+  const modelId = options?.modelId;
   const envKey = envVarName(provider);
+  const pinned = getPinnedProfile(provider, modelId);
+
+  // Pinned model: ONLY the named profile is acceptable. No env-var fallback,
+  // no other profiles. Fails closed if the pinned profile has no usable key.
+  if (pinned) {
+    try {
+      const raw = readFileSync(AUTH_PROFILES_PATH, "utf8");
+      const store = JSON.parse(raw) as { profiles?: Record<string, AuthProfile> };
+      const profile = store.profiles?.[pinned];
+      if (profile) {
+        const result = parseProfileCredential(profile);
+        if (result) {
+          log?.(
+            `[auth] ${provider}/${modelId}: using pinned profile ${pinned}${result.isOAuth ? " (OAuth)" : ""}`,
+          );
+          return result;
+        }
+      }
+    } catch {
+      /* fall through to empty result */
+    }
+    log?.(
+      `[auth] ${provider}/${modelId}: pinned profile ${pinned} not found or has no usable credential`,
+    );
+    return { key: "", isOAuth: false };
+  }
+
+  const restricted = getRestrictedProfiles();
 
   // 1. Environment variable
   if (process.env[envKey]) {
@@ -159,7 +231,7 @@ export function loadApiKey(provider: string, log?: LogFn): ApiKeyResult {
   }
   profileNames.push(`${provider}:default`);
   if (alias) profileNames.push(`${alias}:default`);
-  profileNames = [...new Set(profileNames)];
+  profileNames = filterRestrictedProfiles([...new Set(profileNames)], restricted);
 
   try {
     const raw = readFileSync(AUTH_PROFILES_PATH, "utf8");
@@ -260,7 +332,7 @@ export function resolveTierModel(tierString: string, log?: LogFn): TierModelSpec
   const provider = tierString.slice(0, slashIdx);
   const modelId = tierString.slice(slashIdx + 1);
   const baseUrl = resolveBaseUrl(provider);
-  const { key: apiKey, isOAuth } = loadApiKey(provider, log);
+  const { key: apiKey, isOAuth } = loadApiKey(provider, { log, modelId });
   const isAnthropic = provider === "anthropic" || baseUrl.includes("anthropic.com");
 
   return { provider, modelId, baseUrl, apiKey, isAnthropic, isOAuth };

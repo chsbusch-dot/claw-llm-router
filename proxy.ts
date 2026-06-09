@@ -53,8 +53,7 @@ function estimateMessageTokens(messages: ChatMessage[]): number {
       chars += message.content
         .filter((item) => item.type === "text")
         .map((item) => item.text ?? "")
-        .join(" ")
-        .length;
+        .join(" ").length;
     }
   }
   return Math.floor(chars / 4);
@@ -203,7 +202,7 @@ async function handleChatCompletion(
   let lastError: Error | undefined;
   let allMissingKeys = true;
 
-  for (const attemptTier of (attemptChain.length > 0 ? attemptChain : chain)) {
+  for (const attemptTier of attemptChain.length > 0 ? attemptChain : chain) {
     const spec = tierConfig[attemptTier];
     try {
       await callProvider(spec, body, stream, res, log);
