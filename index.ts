@@ -143,8 +143,8 @@ function injectModelsConfig(log: PluginLogger): void {
   if (!models.mode) models.mode = "merge";
 
   // Check if already up to date (idempotent)
-  const existing = models.providers[PROVIDER_ID] as { baseUrl?: string } | undefined;
-  if (existing?.baseUrl === providerConfig.baseUrl) {
+  const existing = models.providers[PROVIDER_ID];
+  if (JSON.stringify(existing) === JSON.stringify(providerConfig)) {
     log.info(`${LOG_PREFIX} Config already up to date, skipping write`);
     return;
   }
@@ -441,7 +441,37 @@ export async function handleDoctorCommand(): Promise<{ text: string }> {
 // ── Plugin registration ───────────────────────────────────────────────────────
 
 let activeServer: Server | null = null;
+let proxyStartPromise: Promise<void> | null = null;
 let startTime = Date.now();
+
+function ensureProxyStarted(log: PluginLogger): Promise<void> {
+  if (activeServer) return Promise.resolve();
+  if (proxyStartPromise) return proxyStartPromise;
+
+  proxyStartPromise = (async () => {
+    try {
+      activeServer = await startProxy(log);
+      startTime = Date.now();
+      const tiers = getTierStrings();
+      log.info(`${LOG_PREFIX} Proxy started on port ${PROXY_PORT}`);
+      log.info(`${LOG_PREFIX} SIMPLE    → ${tiers.SIMPLE}`);
+      log.info(`${LOG_PREFIX} MEDIUM    → ${tiers.MEDIUM}`);
+      log.info(`${LOG_PREFIX} COMPLEX   → ${tiers.COMPLEX}`);
+      log.info(`${LOG_PREFIX} REASONING → ${tiers.REASONING}`);
+    } catch (err: unknown) {
+      const e = err as NodeJS.ErrnoException;
+      if (e.code === "EADDRINUSE") {
+        log.warn(`${LOG_PREFIX} Port ${PROXY_PORT} already in use — another instance may be running`);
+      } else {
+        log.error(`${LOG_PREFIX} Failed to start proxy: ${err}`);
+      }
+    } finally {
+      proxyStartPromise = null;
+    }
+  })();
+
+  return proxyStartPromise;
+}
 
 export default {
   id: PROVIDER_ID,
@@ -487,25 +517,7 @@ export default {
       id: `${PROVIDER_ID}-proxy`,
 
       async start(): Promise<void> {
-        try {
-          activeServer = await startProxy(log);
-          startTime = Date.now();
-          const tiers = getTierStrings();
-          log.info(`${LOG_PREFIX} Proxy started on port ${PROXY_PORT}`);
-          log.info(`${LOG_PREFIX} SIMPLE    → ${tiers.SIMPLE}`);
-          log.info(`${LOG_PREFIX} MEDIUM    → ${tiers.MEDIUM}`);
-          log.info(`${LOG_PREFIX} COMPLEX   → ${tiers.COMPLEX}`);
-          log.info(`${LOG_PREFIX} REASONING → ${tiers.REASONING}`);
-        } catch (err: unknown) {
-          const e = err as NodeJS.ErrnoException;
-          if (e.code === "EADDRINUSE") {
-            log.warn(
-              `${LOG_PREFIX} Port ${PROXY_PORT} already in use — another instance may be running`,
-            );
-          } else {
-            log.error(`${LOG_PREFIX} Failed to start proxy: ${err}`);
-          }
-        }
+        await ensureProxyStarted(log);
       },
 
       async stop(): Promise<void> {
@@ -520,6 +532,12 @@ export default {
         log.info(`${LOG_PREFIX} Proxy stopped, port ${PROXY_PORT} released`);
       },
     });
+
+    // OpenClaw 2026.6 lazily loads provider-only plugins after the gateway's
+    // plugin-service startup phase, so their registered services are not started.
+    if (process.argv.includes("gateway")) {
+      void ensureProxyStarted(log);
+    }
 
     // 7. Register /router command with subcommands
     api.registerCommand({

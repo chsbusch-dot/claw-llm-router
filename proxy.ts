@@ -42,6 +42,32 @@ function extractSystemPrompt(messages: ChatMessage[]): string {
     .join(" ");
 }
 
+function estimateMessageTokens(messages: ChatMessage[]): number {
+  let chars = 0;
+  for (const message of messages) {
+    if (typeof message.content === "string") {
+      chars += message.content.length;
+      continue;
+    }
+    if (Array.isArray(message.content)) {
+      chars += message.content
+        .filter((item) => item.type === "text")
+        .map((item) => item.text ?? "")
+        .join(" ")
+        .length;
+    }
+  }
+  return Math.floor(chars / 4);
+}
+
+function isLocalLlamaCppProvider(spec: { provider: string; baseUrl: string }): boolean {
+  return (
+    spec.provider === "llamacpp" ||
+    spec.baseUrl.includes("127.0.0.1:8080") ||
+    spec.baseUrl.includes("localhost:8080")
+  );
+}
+
 // ── Request router ────────────────────────────────────────────────────────────
 
 async function handleChatCompletion(
@@ -57,6 +83,7 @@ async function handleChatCompletion(
   const rlog = new RouterLogger(log);
   const userPrompt = extractUserPrompt(messages);
   const systemPrompt = extractSystemPrompt(messages);
+  const estimatedRequestTokens = estimateMessageTokens(messages);
 
   // ── Extract classifiable prompt ──────────────────────────────────────────
   // The user message may contain more than just the user's input:
@@ -154,18 +181,29 @@ async function handleChatCompletion(
   const tierConfig = loadTierConfig();
   const chain = FALLBACK_CHAIN[tier];
   const targetSpec = tierConfig[tier];
+  const LOCAL_CONTEXT_SOFT_LIMIT = 59000;
+  const shouldSkipLocalForContext = estimatedRequestTokens >= LOCAL_CONTEXT_SOFT_LIMIT;
+  const attemptChain = shouldSkipLocalForContext
+    ? chain.filter((attemptTier) => !isLocalLlamaCppProvider(tierConfig[attemptTier]))
+    : chain;
   rlog.route({
     tier,
     provider: targetSpec.provider,
     model: targetSpec.modelId,
     method: classificationMethod,
-    chain,
+    chain: attemptChain.length > 0 ? attemptChain : chain,
   });
+
+  if (shouldSkipLocalForContext && attemptChain.length > 0) {
+    log.warn(
+      `[claw-llm-router] skipping local tiers for large request (~${estimatedRequestTokens} tokens > ${LOCAL_CONTEXT_SOFT_LIMIT})`,
+    );
+  }
 
   let lastError: Error | undefined;
   let allMissingKeys = true;
 
-  for (const attemptTier of chain) {
+  for (const attemptTier of (attemptChain.length > 0 ? attemptChain : chain)) {
     const spec = tierConfig[attemptTier];
     try {
       await callProvider(spec, body, stream, res, log);

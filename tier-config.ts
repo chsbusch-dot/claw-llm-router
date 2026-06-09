@@ -146,10 +146,20 @@ export function loadApiKey(provider: string, log?: LogFn): ApiKeyResult {
   }
 
   // 2. auth-profiles.json (canonical credential store)
-  // Try both the provider name and any alias (e.g., minimax → minimax-portal)
+  // Honor OpenClaw's configured profile order, then try the provider default
+  // and any alias (e.g., minimax → minimax-portal).
   const alias = AUTH_PROFILE_ALIASES[provider];
-  const profileNames = [`${provider}:default`];
+  let profileNames: string[] = [];
+  try {
+    const config = readOpenClawConfig();
+    const auth = config.auth as { order?: Record<string, string[]> } | undefined;
+    profileNames = auth?.order?.[provider] ?? [];
+  } catch {
+    /* fall through */
+  }
+  profileNames.push(`${provider}:default`);
   if (alias) profileNames.push(`${alias}:default`);
+  profileNames = [...new Set(profileNames)];
 
   try {
     const raw = readFileSync(AUTH_PROFILES_PATH, "utf8");
@@ -216,7 +226,14 @@ function resolveBaseUrl(provider: string): string {
       | { providers?: Record<string, { baseUrl?: string }> }
       | undefined;
     const providerConfig = models?.providers?.[provider];
-    if (providerConfig?.baseUrl) return providerConfig.baseUrl;
+    if (providerConfig?.baseUrl) {
+      if (provider === "google") {
+        return providerConfig.baseUrl.includes("/openai")
+          ? providerConfig.baseUrl
+          : `${providerConfig.baseUrl.replace(/\/$/, "")}/openai`;
+      }
+      return providerConfig.baseUrl;
+    }
   } catch {
     /* fall through */
   }

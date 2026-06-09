@@ -74,9 +74,9 @@ export const ROUTER_MODELS: ModelDefinitionConfig[] = [
   },
   {
     id: "complex",
-    name: "Complex — Claude Sonnet 4.6",
+    name: "Complex — Routed Model",
     api: "openai-completions",
-    reasoning: true,
+    reasoning: false,
     input: ["text", "image"],
     cost: { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite: 3.75 },
     contextWindow: 200_000,
@@ -84,9 +84,9 @@ export const ROUTER_MODELS: ModelDefinitionConfig[] = [
   },
   {
     id: "reasoning",
-    name: "Reasoning — Claude Opus 4.6",
+    name: "Reasoning — Routed Model",
     api: "openai-completions",
-    reasoning: true,
+    reasoning: false,
     input: ["text", "image"],
     cost: { input: 5.0, output: 25.0, cacheRead: 0.5, cacheWrite: 6.25 },
     contextWindow: 200_000,

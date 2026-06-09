@@ -20,18 +20,24 @@ const HOME = process.env.HOME;
 if (!HOME) throw new Error("[claw-llm-router] HOME environment variable not set");
 const OPENCLAW_CONFIG_PATH = `${HOME}/.openclaw/openclaw.json`;
 
-type GatewayInfo = { port: number; token: string };
+type GatewayInfo = { port: number; secret: string };
 
 export function getGatewayInfo(): GatewayInfo {
   try {
     const raw = readFileSync(OPENCLAW_CONFIG_PATH, "utf8");
-    const config = JSON.parse(raw) as { gateway?: { port?: number; auth?: { token?: string } } };
+    const config = JSON.parse(raw) as {
+      gateway?: {
+        port?: number;
+        auth?: { mode?: string; token?: string; password?: string };
+      };
+    };
+    const auth = config.gateway?.auth;
     return {
       port: config.gateway?.port ?? 18789,
-      token: config.gateway?.auth?.token ?? "",
+      secret: auth?.mode === "password" ? (auth.password ?? "") : (auth?.token ?? ""),
     };
   } catch {
-    return { port: 18789, token: "" };
+    return { port: 18789, secret: "" };
   }
 }
 
@@ -42,7 +48,13 @@ export class GatewayProvider implements LLMProvider {
 
   async chatCompletion(
     body: Record<string, unknown>,
-    spec: { modelId: string; apiKey: string; baseUrl: string; provider?: string },
+    spec: {
+      modelId: string;
+      apiKey: string;
+      baseUrl: string;
+      provider?: string;
+      gatewayModel?: string;
+    },
     stream: boolean,
     res: ServerResponse,
     log: PluginLogger,
@@ -59,7 +71,7 @@ export class GatewayProvider implements LLMProvider {
     const modelId = `${provider}/${spec.modelId}`;
     const url = `http://127.0.0.1:${gw.port}/v1/chat/completions`;
 
-    const payload = { ...body, model: modelId, stream };
+    const payload = { ...body, model: spec.gatewayModel ?? modelId, stream };
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -68,7 +80,7 @@ export class GatewayProvider implements LLMProvider {
       const resp = await fetch(url, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${gw.token}`,
+          Authorization: `Bearer ${gw.secret}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),

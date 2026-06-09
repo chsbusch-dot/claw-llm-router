@@ -1,5 +1,8 @@
 {
   "id": "claw-llm-router",
+  "activation": {
+    "onStartup": true
+  },
   "name": "Claw LLM Router",
   "description": "Local prompt classifier that routes to the cheapest capable model. 15-dimension weighted scoring, super fast local routing. Supports any OpenAI-compatible provider + Anthropic native API. Direct to providers via your own API keys — no third parties.",
   "version": "1.0.0",

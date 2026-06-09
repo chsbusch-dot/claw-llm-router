@@ -76,7 +76,13 @@ const gatewayOverrideProvider: LLMProvider = {
     }
     rlog.override({ provider: fullSpec.provider, model: spec.modelId });
     setPendingOverride(userPrompt, spec.modelId, fullSpec.provider);
-    await gatewayProvider.chatCompletion(body, spec, stream, res, log);
+    await gatewayProvider.chatCompletion(
+      body,
+      { ...fullSpec, gatewayModel: "openclaw" },
+      stream,
+      res,
+      log,
+    );
   },
 };
 
