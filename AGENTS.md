@@ -75,6 +75,7 @@ Steps:
 1. Find the git commit where the version was last changed: `git log --all --oneline --grep="Bump version"` or check `git log --oneline -- package.json`.
 2. Run `git log --oneline <last-version-bump-commit>..HEAD` to get all commits since that version.
 3. Add a new section at the top of `CHANGELOG.md` (below the header) using the same format as existing entries:
+
    ```
    ## [<new-version>] - <YYYY-MM-DD>
 
@@ -87,6 +88,7 @@ Steps:
    ### Fixed
    - ...
    ```
+
 4. Only include subsections (Added, Changed, Fixed) that apply. Summarize commits into user-facing descriptions — don't just copy commit messages verbatim.
 5. Include the changelog update in the same commit as the version bump.
 
