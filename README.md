@@ -504,6 +504,23 @@ npx tsx --test tests/classifier.test.ts
 
 See [docs/PROVIDERS.md](docs/PROVIDERS.md) for a step-by-step guide to implementing a new provider.
 
+## Local llama-server as a tier
+
+Any tier can point at a local [llama.cpp](https://github.com/ggerganov/llama.cpp) `llama-server` instead of a hosted provider — set it up as an OpenAI-compatible provider in `~/.openclaw/openclaw.json` (typically `http://127.0.0.1:8080/v1`) and point a tier (usually `SIMPLE`) at it. This is a real cost saver: small short-prompt requests stay free and on-host, and the router automatically falls back to a hosted tier for anything the local model can't handle (large context, tool use, etc. — see `proxy.ts`).
+
+For Ubuntu hosts, the easiest way to install **and retune** `llama-server` is [`chsbusch-dot/Ubuntu-AI-Tools-Install`](https://github.com/chsbusch-dot/Ubuntu-AI-Tools-Install), which ships:
+
+- A one-shot installer that configures llama.cpp, CUDA, and a `llama-server.service` systemd unit.
+- **`llama-reconfigure`**, a menu-driven editor for the running service — change models, GPU layer offload, context window, KV cache type, MoE expert offload, speculative decoding, and the five sampler params (`--temp`, `--top-p`, `--top-k`, `--min-p`, `--repeat-penalty`) without hand-editing the unit file. Atomically swaps and restarts the service. `sudo llama-reconfigure --benchmark` even sweeps configs and ranks them by tokens/sec.
+
+Once your local `llama-server` is up, point the router at it:
+
+```bash
+/router set SIMPLE llamacpp/your-org/your-model-name
+```
+
+(Where `your-org/your-model-name` matches what `llama-server` reports on `GET /v1/models`.)
+
 ## License
 
 MIT
